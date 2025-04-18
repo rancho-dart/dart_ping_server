@@ -18,7 +18,7 @@ dart_filter_kern.o: dart_filter_kern.c
 	clang -O2 -g -Wall -target bpf -c dart_filter_kern.c -o dart_filter_kern.o
 	
 xdp_combined.exe: xdp_combined.c
-	clang -o xdp_combined.exe xdp_combined.c -lbpf -lelf
+	clang -g -o xdp_combined.exe xdp_combined.c -lbpf -lelf
 
 # 编译所有.o文件
 %.o: %.c

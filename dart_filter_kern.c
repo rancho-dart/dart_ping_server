@@ -2,92 +2,66 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 
+#define MAX_PACKET_SIZE 1500
+
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 #define DART_PROTO_NUM 254
-#define ICMP_PROTO_NUM 1
 #define ETH_P_IP 0x0800
 
-struct dart_event {
-    __u32 src_ip;
-    __u32 dst_ip;
-    __u8 dart_version;
-    __u8 dart_proto;
-};
-
+// 使用RINGBUF替代PERF_EVENT_ARRAY
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 1 << 24);  // 16 MB ring buffer
+    __uint(max_entries, 1 << 24); // 16MB缓冲区
 } events SEC(".maps");
 
+struct event {
+    u64 ts;
+    u32 len;
+    u8 pkt[MAX_PACKET_SIZE];
+};
 
 SEC("xdp")
 int dart_filter(struct xdp_md *ctx) {
     void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;
 
-    // bpf_printk 输出的内容会被写入到 /sys/kernel/debug/tracing/trace_pipe 中
-    // 需要在用户态使用 sudo cat /sys/kernel/debug/tracing/trace_pipe 来查看
-    bpf_printk("XDP packet: data=%p, data_end=%p\n", data, data_end); 
-    
+    // 解析以太网头
     struct ethhdr *eth = data;
-    if ((void *)(eth + 1) > data_end){
-        bpf_printk("XDP packet: ethhdr is not valid\n");
+    if ((void *)(eth + 1) > data_end)
         return XDP_PASS;
-    }
-    
-    if (bpf_ntohs(eth->h_proto) != ETH_P_IP){
-        bpf_printk("XDP packet: not IP protocol\n");
-        return XDP_PASS;
-    }
-    
-    struct iphdr *iph = (void *)(eth + 1);
-    if ((void *)(iph + 1) > data_end){
-        bpf_printk("XDP packet: iphdr is not valid\n");
-        return XDP_PASS;
-    }
-    
-    if (iph->protocol != DART_PROTO_NUM){
-        bpf_printk("XDP packet: not DART protocol\n");
-        return XDP_PASS;
-    }
-    
-    __u32 ip_hdr_len = iph->ihl * 4;
-    void *dart_ptr = (void *)iph + ip_hdr_len;
-    if (dart_ptr + 4 > data_end){
-        bpf_printk("XDP packet: dart_ptr is not valid\n");
-        return XDP_PASS;
-    }
-    
-    __u8 version = *((__u8 *)dart_ptr);
-    __u8 proto = *((__u8 *)(dart_ptr + 1));
-    __u8 dst_len = *((__u8 *)(dart_ptr + 2));
-    __u8 src_len = *((__u8 *)(dart_ptr + 3));
-    
-    bpf_printk("DART packet: src_ip=%u.%u.%u.%u, dst_ip=%u.%u.%u.%u, version=%u, proto=%u\n",
-               (iph->saddr & 0xFF), (iph->saddr >> 8) & 0xFF, (iph->saddr >> 16) & 0xFF, (iph->saddr >> 24) & 0xFF,
-               (iph->daddr & 0xFF), (iph->daddr >> 8) & 0xFF, (iph->daddr >> 16) & 0xFF, (iph->daddr >> 24) & 0xFF,
-               version, proto);
 
-    if ((dart_ptr + 4 + dst_len + src_len) > data_end){
-        bpf_printk("XDP packet: dart_ptr + 4 + dst_len + src_len is not valid\n");
+    // 仅处理IPv4包
+    if (eth->h_proto != bpf_htons(ETH_P_IP))
         return XDP_PASS;
-    }
 
+    // 解析IP头
+    struct iphdr *iph = (struct iphdr *)(eth + 1);
+    if ((void *)(iph + 1) > data_end)
+        return XDP_PASS;
 
-    if (proto == ICMP_PROTO_NUM) {
-        bpf_printk("DART packet: ICMP protocol\n");
-        struct dart_event ev = {
-            .src_ip = iph->saddr,
-            .dst_ip = iph->daddr,
-            .dart_version = version,
-            .dart_proto = proto,
-        };
-        // bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, &ev, sizeof(ev));
-        bpf_ringbuf_output(&events, &ev, sizeof(ev), 0);
+    // 检查DART协议号
+    if (iph->protocol != DART_PROTO_NUM)
+        return XDP_PASS;
 
+    // 计算包长度
+    u32 pkt_len = data_end - data;
+    if (pkt_len > MAX_PACKET_SIZE)
+        pkt_len = MAX_PACKET_SIZE;
+
+    // 从ringbuf分配内存
+    struct event *ev = bpf_ringbuf_reserve(&events, sizeof(struct event), 0);
+    if (!ev)
         return XDP_DROP;
-    }
 
-    return XDP_PASS;
+    // 填充事件数据
+    ev->ts = bpf_ktime_get_ns();
+    ev->len = pkt_len;
+    bpf_probe_read_kernel(ev->pkt, pkt_len, data);
+
+    // 提交到用户空间
+    bpf_ringbuf_submit(ev, 0);
+
+    bpf_printk("DART packet captured and dropped.\n"); 
+    return XDP_DROP;
 }
