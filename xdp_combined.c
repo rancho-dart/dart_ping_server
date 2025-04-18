@@ -51,6 +51,25 @@ static int handle_event(void *ctx, void *data, size_t size)
     
     printf("DART Event: %s -> %s  Version: %u  Proto: %u\n",
            src_ip, dst_ip, e->dart_version, e->dart_proto);
+
+    // 检查是否是ICMP REQUEST
+    if (e->dart_proto == IPPROTO_ICMP) {
+        printf("ICMP Request detected. Preparing response...\n");
+
+        // 构造响应逻辑
+        struct dart_event response;
+        response.src_ip = e->dst_ip; // 交换源和目标IP
+        response.dst_ip = e->src_ip;
+        response.dart_version = e->dart_version;
+        response.dart_proto = e->dart_proto;
+
+        // 发送响应逻辑（假设有一个函数 send_response 实现发送）
+        if (send_response(&response) < 0) {
+            fprintf(stderr, "Failed to send ICMP response\n");
+        } else {
+            printf("ICMP Response sent: %s -> %s\n", dst_ip, src_ip);
+        }
+    }
     return 0;
 }
 

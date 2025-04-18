@@ -2,6 +2,7 @@
     "files.exclude": {
         "**/*.o": true,
         "**/*.exe": true,
+        "**/*.tmp": true,
         "**/*.out": true,
         "**/*.class": true,
         "**/*.jar": true,
