@@ -1,0 +1,12 @@
+{
+    "files.exclude": {
+        "**/*.o": true,
+        "**/*.exe": true,
+        "**/*.out": true,
+        "**/*.class": true,
+        "**/*.jar": true,
+        "**/*.pyc": true,
+        "**/__pycache__": true,
+
+    }
+}
